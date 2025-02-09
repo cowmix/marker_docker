@@ -6,12 +6,22 @@ This is a CUDA-enabled Docker wrapper for converting image-based documents to ma
 - **CUDA Support**: Tuned specifically for NVIDIA GPUs  
 - **Image Handling**: Added support for images (JPG, PNG, TIFF) by automatically converting them to PDFs  
 - **Python Client**: A handy client script that can process thousands of files—tested on Mac, Windows, and Linux  
+- **Debug Mode**: Optional debugging that saves all requests and responses for troubleshooting
 
 ## ⚠️ Important Security Note
 This service has **no** authentication and is meant for use in a secured homelab environment. **Do not** expose it to the internet without adding proper security measures!
 
 ## Quick Start
-**Build and run the container with CUDA:**
+**Using Docker Compose (recommended):**
+```bash
+# Create debug logs directory (if using debug mode)
+mkdir debug_logs
+
+# Build and run with compose
+docker compose up --build
+```
+
+**Or build and run manually with CUDA:**
 ```bash
 docker build . -t markerwrapper:cuda
 docker run --gpus all \
@@ -27,6 +37,32 @@ pip install requests
 
 python marker_client.py -o /path/to/output -u http://your.server:port/cornvert/ /path/to/scan/files
 ```
+
+## Debug Mode
+To enable debug mode, which saves all requests and responses:
+
+1. Create a debug directory:
+```bash
+mkdir debug_logs
+```
+
+2. Use the provided compose_sample.yaml file, which already includes debug mode settings
+
+OR
+
+3. If running manually, add the debug flag:
+```bash
+docker run --gpus all \
+  -e MARKER_ROOT_PATH=/cornvert \
+  -e MARKER_HOST=0.0.0.0 \
+  -e MARKER_PORT=8001 \
+  -v ./debug_logs:/usr/src/app/marker/debug_logs \
+  -p 8001:8001 markerwrapper:cuda \
+  /usr/src/app/venv/bin/python /usr/src/app/marker/marker_server.py \
+  --port 8001 --host 0.0.0.0 --root-path /cornvert --debug
+```
+
+Debug logs will be saved in timestamped folders under `./debug_logs/`.
 
 ## Known Issues
 - How I'm overwriting `marker_server.py` in the Dockerfile is lame—I need a better process.
