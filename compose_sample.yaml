@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  ocr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ocr:cuda
+    container_name: ocr-service
+    environment:
+      - MARKER_ROOT_PATH=/convert
+      - MARKER_HOST=0.0.0.0
+      - MARKER_PORT=8001
+    command: >
+      /usr/src/app/venv/bin/python /usr/src/app/marker/marker_server.py
+      --port 8001
+      --host 0.0.0.0
+      --root-path /cornvertz
+      --debug
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./debug_logs:/usr/src/app/marker/debug_logs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
