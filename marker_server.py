@@ -17,15 +17,42 @@ from fastapi import FastAPI, Form, File, UploadFile
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 from marker.settings import settings
+import datetime
+import json
+import shutil
 
 app_data = {}
 
 UPLOAD_DIRECTORY = "./uploads"
+DEBUG_DIRECTORY = "./debug_logs"
 os.makedirs(UPLOAD_DIRECTORY, exist_ok=True)
+os.makedirs(DEBUG_DIRECTORY, exist_ok=True)
 
 SUPPORTED_IMAGE_TYPES = {
     'image/jpeg', 'image/png', 'image/tiff', 'image/bmp', 'image/webp'
 }
+
+def create_debug_folder():
+    """Create a timestamped debug folder for the current request."""
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    debug_folder = os.path.join(DEBUG_DIRECTORY, timestamp)
+    os.makedirs(debug_folder, exist_ok=True)
+    return debug_folder
+
+def save_debug_info(folder: str, request_info: dict, response: dict, filepath: Optional[str] = None):
+    """Save request and response information to the debug folder."""
+    # Save request info
+    with open(os.path.join(folder, "request_info.json"), "w") as f:
+        json.dump(request_info, f, indent=2)
+    
+    # Save response
+    with open(os.path.join(folder, "response.json"), "w") as f:
+        json.dump(response, f, indent=2)
+    
+    # Copy the input file if it exists
+    if filepath and os.path.exists(filepath):
+        file_ext = os.path.splitext(filepath)[1]
+        shutil.copy2(filepath, os.path.join(folder, f"input{file_ext}"))
 
 def convert_image_to_pdf(image_path: str) -> str:
     """Convert an image file to PDF format.
@@ -62,7 +89,7 @@ async def lifespan(app: FastAPI):
     if "models" in app_data:
         del app_data["models"]
 
-def create_app(root_path: str = "") -> FastAPI:
+def create_app(root_path: str = "", debug: bool = False) -> FastAPI:
     app = FastAPI(
         lifespan=lifespan,
         root_path=root_path,
@@ -109,7 +136,7 @@ def create_app(root_path: str = "") -> FastAPI:
             Field(description="The format to output the text in. Can be 'markdown', 'json', or 'html'. Defaults to 'markdown'.")
         ] = "markdown"
 
-    async def _convert_pdf(params: CommonParams):
+    async def _convert_pdf(params: CommonParams, debug_folder: Optional[str] = None):
         assert params.output_format in ["markdown", "json", "html"], "Invalid output format"
         try:
             options = params.model_dump()
@@ -128,10 +155,18 @@ def create_app(root_path: str = "") -> FastAPI:
             metadata = rendered.metadata
         except Exception as e:
             traceback.print_exc()
-            return {
+            response = {
                 "success": False,
                 "error": str(e),
             }
+            if debug and debug_folder:
+                save_debug_info(
+                    debug_folder,
+                    {"params": params.model_dump()},
+                    response,
+                    params.filepath
+                )
+            return response
 
         encoded = {}
         for k, v in images.items():
@@ -139,7 +174,7 @@ def create_app(root_path: str = "") -> FastAPI:
             v.save(byte_stream, format=settings.OUTPUT_IMAGE_FORMAT)
             encoded[k] = base64.b64encode(byte_stream.getvalue()).decode(settings.OUTPUT_ENCODING)
 
-        return {
+        response = {
             "format": params.output_format,
             "output": text,
             "images": encoded,
@@ -147,9 +182,20 @@ def create_app(root_path: str = "") -> FastAPI:
             "success": True,
         }
 
+        if debug and debug_folder:
+            save_debug_info(
+                debug_folder,
+                {"params": params.model_dump()},
+                response,
+                params.filepath
+            )
+
+        return response
+
     @app.post("/marker")
     async def convert_pdf(params: CommonParams):
-        return await _convert_pdf(params)
+        debug_folder = create_debug_folder() if debug else None
+        return await _convert_pdf(params, debug_folder)
 
     @app.post("/marker/upload")
     async def convert_pdf_upload(
@@ -163,6 +209,8 @@ def create_app(root_path: str = "") -> FastAPI:
             media_type="application/pdf,image/jpeg,image/png,image/tiff,image/bmp,image/webp"
         ),
     ):
+        debug_folder = create_debug_folder() if debug else None
+        
         upload_path = os.path.join(UPLOAD_DIRECTORY, file.filename)
         with open(upload_path, "wb+") as upload_file:
             file_contents = await file.read()
@@ -186,7 +234,7 @@ def create_app(root_path: str = "") -> FastAPI:
             output_format=output_format,
         )
         
-        results = await _convert_pdf(params)
+        results = await _convert_pdf(params, debug_folder)
         os.remove(upload_path)
         return results
 
@@ -196,8 +244,9 @@ def create_app(root_path: str = "") -> FastAPI:
 @click.option("--port", type=int, default=8000, help="Port to run the server on")
 @click.option("--host", type=str, default="127.0.0.1", help="Host to run the server on")
 @click.option("--root-path", type=str, default="", help="Root path for the application (e.g., /api/marker)")
-def main(port: int, host: str, root_path: str):
-    app = create_app(root_path)
+@click.option("--debug", is_flag=True, help="Enable debug mode to save all requests and responses")
+def main(port: int, host: str, root_path: str, debug: bool):
+    app = create_app(root_path, debug)
     uvicorn.run(
         app,
         host=host,
